@@ -5,10 +5,6 @@ from aiogram.types import FSInputFile
 from src.msg.texts import Text
 
 
-# from src.msg.text import Text
-# from src.msg.keyboards import Keyboard
-
-
 
 class Singleton(type):
     _instances = {}
