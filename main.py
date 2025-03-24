@@ -11,7 +11,7 @@ from src.msg.messages import Messages
 
 
 async def main():
-    bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'))
+    bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'), timeout=30)
     dp = Dispatcher(bot=bot)
     Messages(bot=bot)
 
