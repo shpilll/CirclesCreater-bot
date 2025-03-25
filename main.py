@@ -11,7 +11,7 @@ from src.msg.messages import Messages
 
 
 async def main():
-    bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'), timeout=30)
+    bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'), timeout=60)
     dp = Dispatcher(bot=bot)
     Messages(bot=bot)
 
@@ -19,12 +19,6 @@ async def main():
 
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
-# async def launcher():
-#     sw = asyncio.create_task(sub_watcher())
-#     b = asyncio.create_task(main())
-#     ps = asyncio.create_task(ping_servers())
-#     await asyncio.gather(sw, b, ps)
 
 
 if __name__ == "__main__":
