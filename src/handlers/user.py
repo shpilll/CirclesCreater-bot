@@ -1,6 +1,8 @@
 import asyncio
 import os
 from asyncio import Semaphore
+import subprocess
+
 
 import aiogram.exceptions
 from aiogram import Router, F, Bot
@@ -16,7 +18,7 @@ from src.msg.messages import Messages
 router = Router()
 MAX_RETRIES = 3
 RETRY_DELAY = 10
-video_processing_semaphore = Semaphore(2)
+video_processing_semaphore = Semaphore(1)
 
 
 @router.message(Command("start"))
@@ -47,74 +49,81 @@ async def safe_download(bot: Bot, file_path: str, destination: str, retries: int
     return False
 
 
+from concurrent.futures import ThreadPoolExecutor
+
+thread_pool = ThreadPoolExecutor(max_workers=2)
+
 @router.message(F.video)
 async def get_video(message: Message):
-    async with video_processing_semaphore:
-        bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'))
-        file_id = message.video.file_id
-        file_path = f"temp_{file_id}.mp4"
-        output_path = f"processed_{file_id}.mp4"
-        status_message = None
+    try:
+        async with video_processing_semaphore:
+            bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode='Markdown'))
+            file_id = message.video.file_id
+            file_path = f"temp_{file_id}.mp4"
+            output_path = f"processed_{file_id}.mp4"
+            status_message = None
 
-        try:
             try:
-                file = await bot.get_file(file_id)
-                if file.file_size > 45 * 1024 * 1024:
-                    raise ValueError("Видео превышает максимальный размер (45 МБ)")
-            except (aiogram.exceptions.TelegramBadRequest, ValueError) as e:
-                status_message = await message.answer(f"*❌ {str(e)}*")
-                return
-
-            status_message = await message.answer("*📨 Скачиваю видео...*")
-
-            downloaded = False
-            for attempt in range(MAX_RETRIES):
                 try:
-                    await bot.download_file(file.file_path, file_path)
-                    downloaded = True
-                    break
-                except (asyncio.TimeoutError) as e:
-                    if attempt == MAX_RETRIES - 1:
-                        await status_message.edit_text("⚠️ Не удалось скачать видео после нескольких попыток")
-                        return
-                    await asyncio.sleep(RETRY_DELAY)
+                    file = await bot.get_file(file_id)
+                    if file.file_size > 45 * 1024 * 1024:
+                        raise ValueError("Видео превышает максимальный размер (45 МБ)")
+                except (aiogram.exceptions.TelegramBadRequest, ValueError) as e:
+                    status_message = await message.answer(f"*❌ {str(e)}*")
+                    return
 
-            if not downloaded:
-                return
+                status_message = await message.answer("*📨 Скачиваю видео...*")
 
-            await status_message.edit_text("*♻️ Обрабатываю видео...*")
-            try:
-                crop_video(file_path, output_path)
-            except Exception as e:
-                await status_message.edit_text(f"❌ Ошибка обработки: {str(e)}")
-                return
+                downloaded = False
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        await bot.download_file(file.file_path, file_path)
+                        downloaded = True
+                        break
+                    except asyncio.TimeoutError:
+                        if attempt == MAX_RETRIES - 1:
+                            await status_message.edit_text("⚠️ Не удалось скачать видео после нескольких попыток")
+                            return
+                        await asyncio.sleep(RETRY_DELAY)
 
-            try:
-                await message.answer_video_note(video_note=FSInputFile(output_path))
-                await status_message.delete()
-            except Exception as e:
-                await status_message.edit_text(f"❌ Ошибка отправки: {str(e)}")
+                if not downloaded:
+                    return
 
-        except Exception as e:
-            error_msg = f"❌ Неожиданная ошибка: {str(e)}"
-            if status_message:
-                await status_message.edit_text(error_msg)
-            else:
-                await message.answer(error_msg)
+                await status_message.edit_text("*♻️ Обрабатываю видео...*")
 
-        finally:
-            cleanup_files = [file_path, output_path]
-            for path in cleanup_files:
+                # Запуск обработки в отдельном потоке
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(thread_pool, crop_video, file_path, output_path)
+
                 try:
-                    if path and os.path.exists(path):
-                        os.remove(path)
+                    await message.answer_video_note(video_note=FSInputFile(output_path))
+                    await status_message.delete()
                 except Exception as e:
-                    print(f"Ошибка удаления {path}: {e}")
+                    await status_message.edit_text(f"❌ Ошибка отправки: {str(e)}")
 
-            try:
-                await bot.session.close()
-            except Exception:
-                pass
+            except Exception as e:
+                error_msg = f"❌ Неожиданная ошибка: {str(e)}"
+                if status_message:
+                    await status_message.edit_text(error_msg)
+                else:
+                    await message.answer(error_msg)
+
+            finally:
+                cleanup_files = [file_path, output_path]
+                for path in cleanup_files:
+                    try:
+                        if os.path.exists(path):
+                            os.remove(path)
+                    except Exception as e:
+                        print(f"Ошибка удаления {path}: {e}")
+
+                try:
+                    await bot.session.close()
+                except Exception:
+                    pass
+
+    except Exception as e:
+        print(f"Unexpected error: {e}")
 
 @router.message(F.animation)
 async def get_gif(message: Message):
